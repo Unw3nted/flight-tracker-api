@@ -6,64 +6,96 @@ import csvParser from "csv-parser";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// === Load Aircraft Database CSV ===
-const aircraftDatabase = {};
+// Dropbox CSV direct download link
+const CSV_URL = "https://www.dropbox.com/scl/fi/yd5szvvdb26g3z3nfzs6a/aircraftdatabase.csv?rlkey=eub7sf41he7kmf511uhfmx0kq&st=66vr1cin&dl=1";
+const CSV_PATH = "./aircraftdatabase.csv";
 
-fs.createReadStream("aircraftdatabase.csv")
-  .pipe(
-    csvParser({
-      mapHeaders: ({ header }) => header.replace(/'/g, "").trim(),
-      mapValues: ({ value }) => value.replace(/'/g, "").trim(),
-    })
-  )
-  .on("data", (row) => {
-    if (row.icao24 && row.typecode && row.typecode.toLowerCase() !== "unknow") {
-      aircraftDatabase[row.icao24.toLowerCase()] = row.typecode;
-    }
-  })
-  .on("end", () => {
-    console.log(
-      "Aircraft database loaded:",
-      Object.keys(aircraftDatabase).length,
-      "entries"
-    );
+// Object to store aircraft types by ICAO24
+let aircraftTypes = {};
+
+// Download CSV if not present
+const downloadCSV = async () => {
+  if (fs.existsSync(CSV_PATH)) {
+    console.log("CSV already exists locally, skipping download.");
+    return;
+  }
+
+  console.log("Downloading CSV from Dropbox...");
+  const res = await fetch(CSV_URL);
+  if (!res.ok) throw new Error(`Failed to download CSV: ${res.statusText}`);
+
+  const fileStream = fs.createWriteStream(CSV_PATH);
+  await new Promise((resolve, reject) => {
+    res.body.pipe(fileStream);
+    res.body.on("error", reject);
+    fileStream.on("finish", resolve);
   });
 
-// Helper function
-function getAircraftType(icao24) {
-  if (!icao24) return "Unknown";
-  return aircraftDatabase[icao24.toLowerCase()] || "Unknown";
-}
+  console.log("CSV downloaded successfully!");
+};
 
-// === OpenSky API Endpoint ===
+// Load CSV into memory
+const loadCSV = () => {
+  return new Promise((resolve, reject) => {
+    const results = {};
+    fs.createReadStream(CSV_PATH)
+      .pipe(csvParser({ separator: ',', quote: "'" })) // <--- important
+      .on("data", (row) => {
+        const icao = row['icao24']?.toLowerCase();
+        const type = row['typecode'];
+        if (icao && type) {
+          results[icao.trim()] = type.trim();
+        }
+      })
+      .on("end", () => {
+        aircraftTypes = results;
+        console.log("Aircraft CSV loaded, total entries:", Object.keys(aircraftTypes).length);
+        resolve();
+      })
+      .on("error", reject);
+  });
+};
+
+
+// Fetch flight data from OpenSky
+const fetchFlights = async () => {
+  const res = await fetch("https://opensky-network.org/api/states/all");
+  if (!res.ok) throw new Error(`Failed to fetch flights: ${res.statusText}`);
+  const data = await res.json();
+
+  // Map flights with aircraft type
+  const flights = data.states.map((f) => ({
+    callsign: f[1]?.trim() || "Unknown",
+    country: f[2] || "Unknown",
+    latitude: f[6],
+    longitude: f[5],
+    altitude: f[7],
+    velocity: f[9],
+    heading: f[10],
+    type: aircraftTypes[f[0]?.toLowerCase()] || "Unknown",
+  }));
+
+  return flights;
+};
+
+// API endpoint
 app.get("/flights", async (req, res) => {
   try {
-    const url = "https://opensky-network.org/api/states/all";
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (!data.states) return res.json([]);
-
-    const flights = data.states.map((state) => ({
-      icao24: state[0],
-      callsign: state[1] ? state[1].trim() : "N/A",
-      origin_country: state[2],
-      longitude: state[5],
-      latitude: state[6],
-      baro_altitude: state[7],
-      velocity: state[9],
-      heading: state[10],
-      type: getAircraftType(state[0]),
-    }));
-
+    const flights = await fetchFlights();
     res.json(flights);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to fetch OpenSky data" });
+    console.error("Error fetching flights:", err);
+    res.status(500).send("Error fetching flights");
   }
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(PORT, async () => {
+  try {
+    await downloadCSV();
+    await loadCSV();
+    console.log(`Server running on port ${PORT}`);
+  } catch (err) {
+    console.error("Failed to start server:", err);
+  }
 });
