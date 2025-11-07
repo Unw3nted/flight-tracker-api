@@ -7,8 +7,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Dropbox CSV direct download link
-const CSV_URL = "https://www.dropbox.com/scl/fi/yd5szvvdb26g3z3nfzs6a/aircraftdatabase.csv?rlkey=eub7sf41he7kmf511uhfmx0kq&st=66vr1cin&dl=1";
-const CSV_PATH = "./aircraftdatabase.csv";
+const CSV_URL = process.env.CSV_URL;
+const CSV_PATH = "./aircraftdatabase.csv"; 
 
 // Object to store aircraft types by ICAO24
 let aircraftTypes = {};
