@@ -90,11 +90,11 @@ app.get("/flights", async (req, res) => {
 });
 
 // Start server
-app.listen(PORT, async () => {
+app.listen(PORT, "0.0.0.0", async () => {
   try {
     await downloadCSV();
     await loadCSV();
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
   } catch (err) {
     console.error("Failed to start server:", err);
   }
