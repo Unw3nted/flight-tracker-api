@@ -22,7 +22,7 @@ This application serves live flight data including:
 ├── index.js              # Main server application
 ├── package.json          # Node.js dependencies
 ├── aircraftdatabase.csv  # Downloaded aircraft database (auto-generated)
-└── replit.md            # This file
+└── README.md             # This file
 ```
 
 ### Dependencies
