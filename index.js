@@ -6,20 +6,20 @@ import csvParser from "csv-parser";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Dropbox CSV direct download link
-const CSV_URL = process.env.CSV_URL;
-const CSV_PATH = "./aircraftdatabase.csv"; 
+// Dropbox direct download link (dl=1 ensures direct download)
+const CSV_URL = "https://www.dropbox.com/scl/fi/yd5szvvdb26g3z3nfzs6a/aircraftdatabase.csv?rlkey=eub7sf41he7kmf511uhfmx0kq&dl=1";
+const CSV_PATH = "./aircraftdatabase.csv";
 
-// Object to store aircraft types by ICAO24
-let aircraftTypes = {};
+// Use a Map for faster lookups
+let aircraftTypes = new Map();
 
-// Download CSV if not present
+// Flight data cache
+let cachedFlights = [];
+let lastFetch = 0; // timestamp of last OpenSky fetch
+const CACHE_DURATION = 10000; // 10 seconds cache
+
+// Download CSV from Dropbox
 const downloadCSV = async () => {
-  if (fs.existsSync(CSV_PATH)) {
-    console.log("CSV already exists locally, skipping download.");
-    return;
-  }
-
   console.log("Downloading CSV from Dropbox...");
   const res = await fetch(CSV_URL);
   if (!res.ok) throw new Error(`Failed to download CSV: ${res.statusText}`);
@@ -37,64 +37,61 @@ const downloadCSV = async () => {
 // Load CSV into memory
 const loadCSV = () => {
   return new Promise((resolve, reject) => {
-    const results = {};
     fs.createReadStream(CSV_PATH)
-      .pipe(csvParser({ separator: ',', quote: "'" })) // <--- important
+      .pipe(csvParser())
       .on("data", (row) => {
-        const icao = row['icao24']?.toLowerCase();
-        const type = row['typecode'];
-        if (icao && type) {
-          results[icao.trim()] = type.trim();
+        if (row.icao24 && row.typecode) {
+          aircraftTypes.set(row.icao24.toLowerCase(), row.typecode);
         }
       })
       .on("end", () => {
-        aircraftTypes = results;
-        console.log("Aircraft CSV loaded, total entries:", Object.keys(aircraftTypes).length);
+        console.log(`Aircraft CSV loaded, total entries: ${aircraftTypes.size}`);
         resolve();
       })
       .on("error", reject);
   });
 };
 
-
-// Fetch flight data from OpenSky
+// Fetch flights from OpenSky with caching
 const fetchFlights = async () => {
-  const res = await fetch("https://opensky-network.org/api/states/all");
-  if (!res.ok) throw new Error(`Failed to fetch flights: ${res.statusText}`);
-  const data = await res.json();
+  // Return cached data if it's still valid
+  if (Date.now() - lastFetch < CACHE_DURATION && cachedFlights.length) return cachedFlights;
 
-  // Map flights with aircraft type
-  const flights = data.states.map((f) => ({
-    callsign: f[1]?.trim() || "Unknown",
-    country: f[2] || "Unknown",
-    latitude: f[6],
-    longitude: f[5],
-    altitude: f[7],
-    velocity: f[9],
-    heading: f[10],
-    type: aircraftTypes[f[0]?.toLowerCase()] || "Unknown",
-  }));
+  try {
+    const res = await fetch("https://opensky-network.org/api/states/all");
+    const data = await res.json();
 
-  return flights;
+    cachedFlights = data.states.map((f) => ({
+      callsign: f[1]?.trim() || "",
+      country: f[2] || "",
+      latitude: f[6],
+      longitude: f[5],
+      altitude: f[7],
+      velocity: f[9],
+      heading: f[10],
+      type: aircraftTypes.get(f[0].toLowerCase()) || "Unknown",
+    }));
+
+    lastFetch = Date.now();
+    return cachedFlights;
+  } catch (err) {
+    console.error("Error fetching flights:", err);
+    return [];
+  }
 };
 
 // API endpoint
 app.get("/flights", async (req, res) => {
-  try {
-    const flights = await fetchFlights();
-    res.json(flights);
-  } catch (err) {
-    console.error("Error fetching flights:", err);
-    res.status(500).send("Error fetching flights");
-  }
+  const flights = await fetchFlights();
+  res.json(flights);
 });
 
 // Start server
-app.listen(PORT, "0.0.0.0", async () => {
+app.listen(PORT, async () => {
   try {
     await downloadCSV();
     await loadCSV();
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
   } catch (err) {
     console.error("Failed to start server:", err);
   }
